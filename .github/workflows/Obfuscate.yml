@@ -5,7 +5,6 @@ on:
     branches:
       - main
   schedule:
-    # 每天凌晨1:00运行
     - cron: "0 1 * * *"
 
 permissions:
@@ -26,73 +25,84 @@ jobs:
 
       - name: 安装依赖项
         run: |
-          # 锁定 obfuscator 版本，保证混淆结果长期稳定
           npm install -g javascript-obfuscator@4.1.0
 
       - name: 下载 BPB worker.js（使用 Releases 地址）
         run: |
-          # 主要下载URL - 使用 GitHub Releases
           PRIMARY_URL="https://github.com/bia-pain-bache/BPB-Worker-Panel/releases/download/v4.0.1/worker.js"
-          
-          # 备用URL列表
           FALLBACK_URLS=(
             "https://raw.githubusercontent.com/bia-pain-bache/BPB-Worker-Panel/main/build/unobfuscated-worker.js"
             "https://cdn.jsdelivr.net/gh/bia-pain-bache/BPB-Worker-Panel@main/build/unobfuscated-worker.js"
             "https://ghproxy.com/https://raw.githubusercontent.com/bia-pain-bache/BPB-Worker-Panel/main/build/unobfuscated-worker.js"
           )
-          
-          echo "开始下载BPB worker.js文件..."
-          
-          # 尝试主URL（Releases地址）
+
+          echo "开始下载 BPB worker.js 文件..."
+
           if wget -O origin.js "$PRIMARY_URL"; then
-            echo "✅ Releases URL下载成功"
+            echo "Releases URL 下载成功"
           else
-            echo "Releases URL下载失败，尝试备用URL..."
-            
-            # 尝试备用URL
+            echo "Releases 下载失败，切换备用源..."
             SUCCESS=false
             for url in "${FALLBACK_URLS[@]}"; do
-              echo "尝试下载: $url"
+              echo "尝试: $url"
               if wget -O origin.js "$url"; then
-                echo "✅ 备用URL下载成功: $url"
+                echo "备用下载成功: $url"
                 SUCCESS=true
                 break
-              else
-                echo "❌ 下载失败: $url"
               fi
             done
-            
-            # 最终检查
-            if [ "$SUCCESS" = false ] || [ ! -f origin.js ] || [ ! -s origin.js ]; then
-              echo "❌ 所有下载源均失败，请检查网络或URL有效性"
+            if [ "$SUCCESS" = false ] || [ ! -s origin.js ]; then
+              echo "全部下载源失败，任务中止"
               exit 1
             fi
           fi
-          
-          echo "下载完成，文件大小: $(wc -c < origin.js) 字节"
+          echo "下载完成: $(wc -c < origin.js) 字节"
 
-      - name: 混淆 BPB worker.js
+      - name: 一阶段预混淆（结构扰动层）
         run: |
-          # 使用固定 seed，保证混淆输出可重复、稳定、不随机
-          javascript-obfuscator origin.js --output _worker.js \
+          echo "开始第一阶段预混淆..."
+
+          javascript-obfuscator origin.js --output stage1.js \
+            --compact false \
+            --dead-code-injection true \
+            --dead-code-injection-threshold 0.2 \
+            --string-array true \
+            --string-array-threshold 1 \
+            --string-array-encoding none \
+            --string-array-index-shift true \
+            --identifier-names-generator hexadecimal \
+            --unicode-escape-sequence false \
+            --seed 9527
+
+          echo "一阶段完成: $(wc -c < stage1.js) 字节"
+
+      - name: 二阶段企业级深度混淆（主混淆层）
+        run: |
+          echo "开始第二阶段企业级混淆..."
+
+          javascript-obfuscator stage1.js --output _worker.js \
             --compact true \
-            --control-flow-flattening false \
+            --control-flow-flattening true \
+            --control-flow-flattening-threshold 0.9 \
             --dead-code-injection false \
             --identifier-names-generator mangled \
             --rename-globals false \
             --string-array true \
             --string-array-encoding 'rc4' \
-            --string-array-threshold 0.75 \
+            --string-array-threshold 1 \
+            --string-array-index-shift true \
             --transform-object-keys true \
+            --numbers-to-expressions true \
             --unicode-escape-sequence true \
+            --target 'node' \
             --seed 9527
 
-          echo "混淆完成，输出文件大小: $(wc -c < _worker.js) 字节"
+          echo "二阶段完成，最终文件大小: $(wc -c < _worker.js) 字节"
 
       - name: 提交更改
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           branch: main
-          commit_message: ':arrow_up: 更新最新的 BPB 面板'
+          commit_message: ':rocket: 企业级混淆 + BPB 最新构建自动更新'
           commit_author: 'github-actions[bot] <github-actions[bot]@users.noreply.github.com>'
           push_options: '--set-upstream'
